@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>뚱토끼 먹방 - Fat Rabbit Mukbang</title>
+    <!-- Firebase SDK (v9 호환 모드) -->
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>    
+    <style>
+        :root {
+            --primary: #ff85a2;
+            --secondary: #ffccd5;
+            --accent: #ff4d6d;
+            --bg: #fff0f3;
+        }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+            background-color: var(--bg);
+            overflow: hidden;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%; max-width: 500px; height: 100vh;
+            background: linear-gradient(to bottom, #a2d2ff, #ffffff);
+            box-shadow: 0 0 50px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 10; transition: 0.5s;
+            background: rgba(255, 255, 255, 0.95);
+        }
+
+        .hidden { display: none !important; }
+
+        h1 { color: var(--accent); margin-bottom: 10px; font-size: 2.5rem; text-shadow: 2px 2px #fff; }
+
+        #login-page input {
+            padding: 15px 25px; border: 3px solid var(--secondary); border-radius: 30px;
+            font-size: 1.1rem; width: 220px; outline: none; margin-bottom: 20px;
+            text-align: center;
+        }
+
+        button {
+            padding: 15px 40px; border: none; border-radius: 30px;
+            background: var(--primary); color: white; font-weight: bold;
+            cursor: pointer; transition: 0.3s; font-size: 1.1rem;
+            box-shadow: 0 4px 15px rgba(255, 133, 162, 0.4);
+        }
+
+        button:hover { background: var(--accent); transform: translateY(-3px); }
+
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; padding: 20px;
+            display: flex; justify-content: space-between; align-items: center;
+            box-sizing: border-box; pointer-events: none; z-index: 5;
+        }
+
+        .score-box { 
+            font-size: 1.1rem; font-weight: bold; color: #444; 
+            background: rgba(255,255,255,0.85); padding: 8px 18px; 
+            border-radius: 25px; border: 2px solid var(--secondary);
+        }
+
+        canvas { display: block; filter: drop-shadow(0 5px 15px rgba(0,0,0,0.1)); }
+
+        #ranking-list {
+            width: 85%; max-height: 250px; overflow-y: auto;
+            margin: 20px 0; padding: 10px; list-style: none;
+            background: #fff; border-radius: 15px; border: 1px solid #eee;
+        }
+
+        #ranking-list li {
+            display: flex; justify-content: space-between; padding: 12px;
+            border-bottom: 1px solid #f9f9f9; font-size: 1rem;
+        }
+
+        .rank-num { font-weight: bold; color: var(--accent); }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- 상단 점수 UI -->
+        <div id="ui-layer" class="hidden">
+            <div class="score-box" id="display-name">?</div>
+            <div class="score-box">점수: <span id="display-score">0</span></div>
+        </div>
+
+        <!-- 로그인 화면 -->
+        <div id="login-page" class="screen">
+            <img src="https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?q=80&w=200&auto=format&fit=crop" style="width:120px; height:120px; border-radius:50%; object-fit:cover; margin-bottom:15px; border:5px solid white; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+            <h1>뚱토끼 먹방 🐰</h1>
+            <p style="color: #888; margin-bottom: 25px; text-align: center; line-height: 1.5;">
+                방향키 <b>[←] [→]</b> 로 이동하세요!<br>
+                맛있는 음식을 먹고 최고의 뚱토끼가 되어보세요!
+            </p>
+            <input type="text" id="nickname" placeholder="닉네임 입력" maxlength="10">
+            <button onclick="startGame()">먹방 시작!</button>
+        </div>
+
+        <!-- 결과 & 랭킹 화면 -->
+        <div id="rank-page" class="screen hidden">
+            <h1 id="result-text">배불러요! (게임 종료)</h1>
+            <h2 id="final-score" style="color:var(--accent); font-size: 2.5rem; margin-top:0;">0</h2>
+            <div style="width: 85%; text-align: left; font-weight: bold; color:#555; margin-bottom: 10px;">🏆 실시간 먹방 랭킹</div>
+            <ul id="ranking-list"></ul>
+            <button onclick="location.reload()">다시 도전하기</button>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <!-- 토끼 이미지 원본 -->
+    <img id="rabbit-img" src="https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?q=80&w=300&auto=format&fit=crop" crossorigin="anonymous" style="display:none;">
+
+    <script>
+        // --- [중요] Firebase 설정 영역 ---
+        // 하단의 설정을 본인의 Firebase 프로젝트 설정으로 교체하세요.
+        const firebaseConfig = {
+  apiKey: "AIzaSyBbaROLdMnZBNhZLeA8Bm_cXS7v3AF8bps",
+  authDomain: "bunny-game-1fd6b.firebaseapp.com",
+  databaseURL: "https://bunny-game-1fd6b-default-rtdb.firebaseio.com",
+  projectId: "bunny-game-1fd6b",
+  storageBucket: "bunny-game-1fd6b.firebasestorage.app",
+  messagingSenderId: "374701143638",
+  appId: "1:374701143638:web:64395681a6b3ce340fadf7",
+  measurementId: "G-GQQG4554V8"        };
+
+        // Firebase 초기화
+        let db;
+        try {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+        } catch (e) {
+            console.warn("Firebase 설정이 올바르지 않습니다. 로컬 모드로 실행합니다.");
+        }
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let nickname = "";
+        let score = 0;
+        let isGameActive = false;
+        
+        let rabbit = {
+            x: 0, y: 0,
+            baseW: 75, baseH: 75,
+            scale: 1.0,
+            speed: 9,
+            moveLeft: false,
+            moveRight: false
+        };
+
+        let items = [];
+        let animationId;
+
+        const foodList = [
+            { name: '🍡', type: 'food' }, // 탕후루
+            { name: '🍜', type: 'food' }, // 마라탕
+            { name: '🧋', type: 'food' }, // 버블티
+            { name: '🥐', type: 'food' }, // 크로플
+            { name: '🍗', type: 'food' }, // 치킨
+            { name: '🍕', type: 'food' }  // 피자
+        ];
+        const trapList = [
+            { name: '🥦', type: 'trap' }, // 브로콜리
+            { name: '🏋️', type: 'trap' }, // 아령
+            { name: '⚖️', type: 'trap' }  // 체중계
+        ];
+
+        function initCanvas() {
+            canvas.width = document.getElementById('game-container').clientWidth;
+            canvas.height = document.getElementById('game-container').clientHeight;
+            rabbit.x = canvas.width / 2 - rabbit.baseW / 2;
+            rabbit.y = canvas.height - 140;
+        }
+        window.addEventListener('resize', initCanvas);
+        initCanvas();
+
+        // 조작 이벤트
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') rabbit.moveLeft = true;
+            if (e.key === 'ArrowRight') rabbit.moveRight = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft') rabbit.moveLeft = false;
+            if (e.key === 'ArrowRight') rabbit.moveRight = false;
+        });
+
+        function startGame() {
+            nickname = document.getElementById('nickname').value.trim() || "익명토끼";
+            document.getElementById('display-name').innerText = nickname;
+            document.getElementById('login-page').classList.add('hidden');
+            document.getElementById('ui-layer').classList.remove('hidden');
+            
+            isGameActive = true;
+            score = 0;
+            rabbit.scale = 1.0;
+            items = [];
+            loop();
+        }
+
+        function createItem() {
+            const isFood = Math.random() > 0.3;
+            const list = isFood ? foodList : trapList;
+            const data = list[Math.floor(Math.random() * list.length)];
+            
+            items.push({
+                x: 30 + Math.random() * (canvas.width - 60),
+                y: -50,
+                speed: 3 + Math.random() * 4 + (score / 300),
+                ...data
+            });
+        }
+
+        function loop() {
+            if (!isGameActive) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 이동
+            if (rabbit.moveLeft && rabbit.x > 0) rabbit.x -= rabbit.speed;
+            if (rabbit.moveRight && rabbit.x < canvas.width - (rabbit.baseW * rabbit.scale)) rabbit.x += rabbit.speed;
+
+            // 토끼 그리기
+            const curW = rabbit.baseW * rabbit.scale;
+            const curH = rabbit.baseH * (1 + (rabbit.scale - 1) * 0.4);
+            const img = document.getElementById('rabbit-img');
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(rabbit.x, rabbit.y - (curH - rabbit.baseH), curW, curH, 35);
+            ctx.clip();
+            ctx.drawImage(img, rabbit.x, rabbit.y - (curH - rabbit.baseH), curW, curH);
+            ctx.restore();
+
+            // 아이템 생성 및 이동
+            if (Math.random() < 0.04) createItem();
+
+            for (let i = items.length - 1; i >= 0; i--) {
+                let it = items[i];
+                it.y += it.speed;
+                ctx.font = "45px Arial";
+                ctx.fillText(it.name, it.x, it.y);
+
+                const rabbitRealW = rabbit.baseW * rabbit.scale;
+                if (it.y > rabbit.y - 20 && it.y < rabbit.y + 60 &&
+                    it.x > rabbit.x - 20 && it.x < rabbit.x + rabbitRealW) {
+                    
+                    if (it.type === 'food') {
+                        score += 10;
+                        rabbit.scale += 0.05; // 뚱뚱해짐
+                        document.getElementById('display-score').innerText = score;
+                    } else {
+                        gameOver();
+                    }
+                    items.splice(i, 1);
+                    continue;
+                }
+                if (it.y > canvas.height) items.splice(i, 1);
+            }
+            animationId = requestAnimationFrame(loop);
+        }
+
+        async function gameOver() {
+            isGameActive = false;
+            cancelAnimationFrame(animationId);
+            document.getElementById('final-score').innerText = score + " 점";
+            document.getElementById('rank-page').classList.remove('hidden');
+            document.getElementById('ui-layer').classList.add('hidden');
+
+            if (db) {
+                try {
+                    await db.collection("mukbang_rank").add({
+                        name: nickname,
+                        score: score,
+                        date: new Date()
+                    });
+                    loadRanking();
+                } catch (e) { showDummyRanking(); }
+            } else { showDummyRanking(); }
+        }
+
+        async function loadRanking() {
+            const listEl = document.getElementById('ranking-list');
+            listEl.innerHTML = "<li>순위 가져오는 중...</li>";
+            try {
+                const snapshot = await db.collection("mukbang_rank").orderBy("score", "desc").limit(10).get();
+                listEl.innerHTML = "";
+                let i = 1;
+                snapshot.forEach(doc => {
+                    const d = doc.data();
+                    listEl.innerHTML += `<li><span class="rank-num">${i++}위</span> <span>${d.name}</span> <span>${d.score}</span></li>`;
+                });
+            } catch (e) { showDummyRanking(); }
+        }
+
+        function showDummyRanking() {
+            const listEl = document.getElementById('ranking-list');
+            listEl.innerHTML = "<li style='font-size:0.8rem; color:red;'>Firebase 연결 안됨 (로컬 모드)</li>";
+            const dummy = [{name: nickname, score: score}, {name: "치즈폭포", score: 500}, {name: "마라덕후", score: 350}].sort((a,b)=>b.score-a.score);
+            dummy.forEach((d, i) => {
+                listEl.innerHTML += `<li><span class="rank-num">${i+1}위</span> <span>${d.name}</span> <span>${d.score}</span></li>`;
+            });
+        }
+    </script>
+</body>
+</html>
